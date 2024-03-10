@@ -141,6 +141,18 @@ struct
 
 struct
 {
+	uint8_t cr1;
+	uint8_t cr2;
+	uint8_t icr;
+	uint8_t sr;
+	uint8_t dr;
+	uint8_t crcpr;
+	uint8_t rxcrcr;
+	uint8_t txcrcr;
+} * spi = 0x5200;
+
+struct
+{
 	uint8_t sr;
 } * rst = 0x50b3;
 
@@ -150,6 +162,11 @@ inline void int_none() {__asm__("sim\n");}
 inline void int_trap() {__asm__("trap\n");}
 inline void int_wfi() {__asm__("wfi\n");}
 inline void int_halt() {__asm__("halt\n");}
+
+#define bit(b) (1<<b)
+#define set(reg,b) reg|=(b) 
+#define reset(reg,b) reg&=~(b)
+#define get(reg,b) reg&b
 
 struct
 {

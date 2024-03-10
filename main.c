@@ -1,77 +1,203 @@
-#include <string.h>
 #include <stdint.h>
 #include "stm8.h"
+#include "charMap.h"
 
-#define F_MASTER 16000000UL
-#define UART_BAUD(baud) uart->brr2 = (((F_MASTER/baud) & 0xF000)>>8)|((F_MASTER/baud) & 0x000F); uart->brr1 = ((F_MASTER/baud) >> 4) & 0x00FF
-//#define UART_CHECK() (UART->SR&(1<<5))>0
-#define UART_RECV() uart->dr
-#define UART_SEND(data) while(!((uart->sr)&(1<<7))); uart->dr = data
-#define GPIO_OUT(port,pin) port->ddr|=1<<pin
-#define GPIO_IN(port,pin) port->ddr&=~(1<<pin)
-#define GPIO_PULLUP(port,pin) port->cr1|=1<<pin
-#define GPIO_FLOAT(port,pin) port->cr1&=~(1<<pin)
-#define GPIO_FAST(port,pin) port->cr2|=1<<pin
-#define GPIO_SLOW(port,pin) port->cr2&=~(1<<pin)
-#define GPIO_INT(port,pin) port->cr2|=1<<pin
-#define GPIO_NOINT(port,pin) port->cr2&=~(1<<pin)
-#define GPIO_SET(port,pin,state) port->odr ^=((state>0)<<pin)
-#define GPIO_GET(port,pin) ((port->idr&(1<<pin))>0)
+#define OLED_DISPLAY_OFF        0xAE
+#define OLED_DISPLAY_ON         0xAF
+
+#define OLED_COMMAND_MODE       0x00
+#define OLED_ONE_COMMAND_MODE   0x80
+#define OLED_DATA_MODE          0x40
+#define OLED_ONE_DATA_MODE      0xC0
+
+#define OLED_ADDRESSING_MODE    0x20
+#define OLED_HORIZONTAL            0x00
+#define OLED_VERTICAL           0x01
+
+#define OLED_NORMAL_V            0xC8
+#define OLED_FLIP_V                0xC0
+#define OLED_NORMAL_H            0xA1
+#define OLED_FLIP_H                0xA0
+
+#define OLED_CONTRAST           0x81
+#define OLED_SETCOMPINS           0xDA
+#define OLED_SETVCOMDETECT        0xDB
+#define OLED_CLOCKDIV             0xD5
+#define OLED_SETMULTIPLEX        0xA8
+#define OLED_COLUMNADDR            0x21
+#define OLED_PAGEADDR            0x22
+#define OLED_CHARGEPUMP            0x8D
+
+#define OLED_NORMALDISPLAY        0xA6
+#define OLED_INVERTDISPLAY        0xA7
+
+const uint8_t _oled_init[] = {
+    OLED_DISPLAY_OFF,
+    OLED_CLOCKDIV,
+    0x80,    // value
+    OLED_CHARGEPUMP,
+    0x14,    // value
+    OLED_ADDRESSING_MODE,
+    2,
+    OLED_NORMAL_H,
+    OLED_NORMAL_V,
+    OLED_CONTRAST,
+    0x7F,    // value
+    OLED_SETVCOMDETECT,
+    0x40,     // value
+    OLED_NORMALDISPLAY,
+    OLED_DISPLAY_ON,
+};
 
 unsigned int millis = 0;
 
-void tim2_update(void) __interrupt(13)
+void tim2_int(void) __interrupt(13)
 {
 	millis+=1;
-	tim2->sr1 &= ~1;
+	reset(tim2->sr1,bit(0));
 }
 
-void init_uart()
+void uart_init()
 {
-	uart->cr2 |= (1<<3);
-	UART_BAUD(9600);
+	set(uart->cr2,bit(3));
+	const int baud = 9600;
+	const uint32_t f=16000000;
+	uart->brr2 = ((f/baud&0xF000)>>8)|(f/baud & 0x000F);
+	uart->brr1 = ((f/baud) >> 4) & 0x00FF;
 }
 
-void init_tim2()
+void uart_send(char data)
+{
+	while(!(get(uart->sr,bit(7))));
+	uart->dr = data;
+}
+
+void tim2_init()
 {
 	tim2->arrh=0x3e;
 	tim2->arrl=0x80;
-	tim2->ier|=1;
-	tim2->cr1|=1;
+	set(tim2->ier,bit(0));
+	set(tim2->cr1,bit(0));
 }
 
-void init_i2c()
+void i2c_init()
 {
 	i2c->freqr=16;
 	i2c->ccrl=0x50;
 	i2c->triser=17;
-	i2c->cr1=1;
+	set(i2c->cr1,bit(0));
 }
 
-void test_i2c()
+void lcd_send(char com,int siz,char * data)
 {
-	i2c->cr2|=1;
-  while (!(i2c->sr1&1));
+	volatile char a = 0;
+	//start
+	set(i2c->cr2,bit(0));
+	while (!(get(i2c->sr1,bit(0))));
+	//addr
 	i2c->dr=0x3C<<1;
-	while (!(i2c->sr1&2));
-	i2c->cr2=2;
-  while (i2c->sr3&1);
-	//UART_SEND('b');
+	while (!(get(i2c->sr1,bit(1))));
+	a+=i2c->sr1;
+	a+=i2c->sr3;	
+	//data
+	i2c->dr=com?0:64;
+	while(!(get(i2c->sr1,bit(7))));
+	for(int i=0;i<siz;i++)
+	{
+		i2c->dr=data[i];
+		while(!(get(i2c->sr1,bit(7))));
+	}
+	//stop
+	set(i2c->cr2,bit(1));
+	while (get(i2c->sr3,bit(0)));
 }
 
+void lcd_char(char c)
+{
+	lcd_send(0,5,charMap[c-32]);
+	char a=0;	
+	lcd_send(0,1,&a);
+}
+
+void lcd_str(char * s)
+{
+	int i =0;
+	while(s[i]!=0)
+	{
+		lcd_char(s[i]);
+		i++;
+	}
+}
+
+void lcd_page(char p)
+{
+	p+=0xb0;
+	lcd_send(1,1,&p);
+	p=0;
+	lcd_send(1,1,&p);
+	p+=0x10;
+	lcd_send(1,1,&p);
+}
+
+void lcd_clear()
+{
+	for (int j=0;j<8;j++)
+	{
+		lcd_page(j);
+		for (int i =0;i<128;i++)
+		{
+			char a=0;
+			lcd_send(0,1,&a);
+		}
+	}
+}
+
+void lcd_init()
+{
+	lcd_send(1,sizeof(_oled_init),_oled_init);
+}
+
+void spi_init()
+{
+	set(spi->cr1,bit(4)|bit(3)|bit(6)|bit(2));
+}
+
+void spi_send(int siz, char * data)
+{
+	for (int i =0;i<siz;i++)
+	{
+		spi->dr=data[i];
+		while(!(get(spi->sr,bit(1))));
+	}
+}
 
 void main()
 {
 	clk->ckdivr = 0;
-	init_tim2();
-	init_uart();
-	init_i2c();
-	//int_all();
+	tim2_init();
+	uart_init();
+	i2c_init();
+	spi_init();
+	int_all();
 	int d;
+	lcd_init();
+	lcd_clear();
+	lcd_str("Hello world");
+	lcd_page(1);
+	lcd_str("Hello world");
+	uint16_t b = 0x0100;	
+	spi_send(2,&b);
+	b=32;
+	spi_send(2,&b);	
+	b=0b0010000000000000;
+	spi_send(2,&b);
+	b=0b0100000000000000;
+	spi_send(2,&b);
+	b=0b0111111111111111;
+	spi_send(2,&b);
 	while(1)
 	{
 		d = millis;
 		while(millis-d<2000);
-		test_i2c();
 	}
 }
