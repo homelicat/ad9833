@@ -31,6 +31,8 @@
 #define OLED_NORMALDISPLAY        0xA6
 #define OLED_INVERTDISPLAY        0xA7
 
+#define BTN(a) bit(4-a)
+
 const uint8_t _oled_init[] = {
     OLED_DISPLAY_OFF,
     OLED_CLOCKDIV,
@@ -55,21 +57,6 @@ void tim2_int(void) __interrupt(13)
 {
 	millis+=1;
 	reset(tim2->sr1,bit(0));
-}
-
-void uart_init()
-{
-	set(uart->cr2,bit(3));
-	const int baud = 9600;
-	const uint32_t f=16000000;
-	uart->brr2 = ((f/baud&0xF000)>>8)|(f/baud & 0x000F);
-	uart->brr1 = ((f/baud) >> 4) & 0x00FF;
-}
-
-void uart_send(char data)
-{
-	while(!(get(uart->sr,bit(7))));
-	uart->dr = data;
 }
 
 void tim2_init()
@@ -171,33 +158,34 @@ void spi_send(int siz, char * data)
 	}
 }
 
+void gpio_init()
+{
+	set(gpio_d->cr1,bit(1)|bit(2)|bit(3));
+}
+
 void main()
 {
 	clk->ckdivr = 0;
+	gpio_init();
 	tim2_init();
-	uart_init();
 	i2c_init();
 	spi_init();
 	int_all();
-	int d;
 	lcd_init();
 	lcd_clear();
-	lcd_str("Hello world");
-	lcd_page(1);
-	lcd_str("Hello world");
-	uint16_t b = 0x0100;	
-	spi_send(2,&b);
-	b=32;
-	spi_send(2,&b);	
-	b=0b0010000000000000;
-	spi_send(2,&b);
-	b=0b0100000000000000;
-	spi_send(2,&b);
-	b=0b0111111111111111;
-	spi_send(2,&b);
+	char old=7;
 	while(1)
 	{
-		d = millis;
-		while(millis-d<2000);
+		if(old!=gpio_d->idr)
+		{
+			lcd_clear();
+			old=gpio_d->idr;
+			lcd_page(0);
+			lcd_str(!(old&BTN(1))?"1:pressed":"1:not");
+			lcd_page(1);
+			lcd_str(!(old&BTN(2))?"2:pressed":"2:not");
+			lcd_page(2);
+			lcd_str(!(old&BTN(3))?"3:pressed":"3:not");
+		}
 	}
 }
